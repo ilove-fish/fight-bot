@@ -1,0 +1,209 @@
+local Players = game:GetService("Players")
+local PathfindingService = game:GetService("PathfindingService")
+local RunService = game:GetService("RunService")
+
+local LocalPlayer = Players.LocalPlayer
+
+-- SETTINGS
+local DETECTION_DISTANCE = 15
+local SAFE_DISTANCE = 10
+local UPDATE_TIME = 0.5
+local TOOL_COOLDOWN = 0.5
+
+local lastActivation = 0
+local running = true
+
+-- CLEANUP
+if _G.CombinedConnection then
+    _G.CombinedConnection:Disconnect()
+end
+
+if _G.CombinedVisuals then
+    for _, object in ipairs(_G.CombinedVisuals) do
+        object:Destroy()
+    end
+end
+
+_G.CombinedVisuals = {}
+
+-- CREATE VISUAL
+local function CreatePart(name, shape, size, color, transparency)
+    local part = Instance.new("Part")
+    part.Name = name
+    part.Shape = shape
+    part.Size = size
+    part.Anchored = true
+    part.CanCollide = false
+    part.CanTouch = false
+    part.CanQuery = false
+    part.Material = Enum.Material.Neon
+    part.Color = color
+    part.Transparency = transparency
+    part.Parent = workspace
+
+    table.insert(_G.CombinedVisuals, part)
+    return part
+end
+
+-- RADIUS
+local radius = CreatePart(
+    "ActivationRadius",
+    Enum.PartType.Cylinder,
+    Vector3.new(0.15, DETECTION_DISTANCE * 2, DETECTION_DISTANCE * 2),
+    Color3.fromRGB(0, 255, 0),
+    0.7
+)
+
+-- DESTINATION MARKER
+local marker = CreatePart(
+    "TargetDestination",
+    Enum.PartType.Ball,
+    Vector3.new(1, 1, 1),
+    Color3.fromRGB(255, 0, 0),
+    0.3
+)
+
+-- LINE ORIGIN
+local startPart = CreatePart(
+    "LineOrigin",
+    Enum.PartType.Block,
+    Vector3.new(0.2, 0.2, 0.2),
+    Color3.fromRGB(255, 0, 0),
+    1
+)
+
+-- BEAM
+local a0 = Instance.new("Attachment", startPart)
+local a1 = Instance.new("Attachment", marker)
+
+local beam = Instance.new("Beam")
+beam.Attachment0 = a0
+beam.Attachment1 = a1
+beam.Width0 = 0.12
+beam.Width1 = 0.12
+beam.FaceCamera = true
+beam.Color = ColorSequence.new(Color3.fromRGB(255, 0, 0))
+beam.LightEmission = 1
+beam.Parent = startPart
+
+-- FIND NEAREST PLAYER
+local function GetNearestPlayer(root)
+    local nearest = nil
+    local shortest = math.huge
+
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer and player.Character then
+            local target = player.Character
+            local targetRoot = target:FindFirstChild("HumanoidRootPart")
+            local hum = target:FindFirstChildOfClass("Humanoid")
+
+            if targetRoot and hum and hum.Health > 0 then
+                local distance = (root.Position - targetRoot.Position).Magnitude
+
+                if distance < shortest then
+                    shortest = distance
+                    nearest = targetRoot
+                end
+            end
+        end
+    end
+
+    return nearest, shortest
+end
+
+-- DESTINATION
+local function GetDestination(root, target)
+    local offset = root.Position - target.Position
+
+    if offset.Magnitude < 0.01 then
+        offset = Vector3.new(1, 0, 0)
+    end
+
+    return target.Position + offset.Unit * SAFE_DISTANCE
+end
+
+-- REALTIME VISUAL UPDATE
+_G.CombinedConnection = RunService.RenderStepped:Connect(function()
+    local character = LocalPlayer.Character
+    local root = character and character:FindFirstChild("HumanoidRootPart")
+
+    if root then
+        startPart.Position = root.Position
+        radius.CFrame =
+            CFrame.new(root.Position - Vector3.new(0, 2.8, 0))
+            * CFrame.Angles(0, 0, math.rad(90))
+    end
+end)
+
+-- MAIN LOOP
+task.spawn(function()
+    while running do
+        task.wait(UPDATE_TIME)
+
+        local character = LocalPlayer.Character
+        local root = character and character:FindFirstChild("HumanoidRootPart")
+        local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+
+        if not root or not humanoid or humanoid.Health <= 0 then
+            continue
+        end
+
+        local target, distance = GetNearestPlayer(root)
+
+        -- TOOL ACTIVATION
+        local tool = character:FindFirstChildOfClass("Tool")
+
+        if target and distance <= DETECTION_DISTANCE then
+            radius.Color = Color3.fromRGB(255, 0, 0)
+
+            if tool and os.clock() - lastActivation >= TOOL_COOLDOWN then
+                lastActivation = os.clock()
+                pcall(function()
+                    tool:Activate()
+                end)
+            end
+        else
+            radius.Color = Color3.fromRGB(0, 255, 0)
+        end
+
+        -- PATHFINDING
+        if target and target.Parent then
+            local destination = GetDestination(root, target)
+            marker.Position = destination
+
+            if distance > SAFE_DISTANCE then
+                local path = PathfindingService:CreatePath({
+                    AgentRadius = 2,
+                    AgentHeight = 5,
+                    AgentCanJump = true,
+                    AgentCanClimb = true
+                })
+
+                local success = pcall(function()
+                    path:ComputeAsync(root.Position, destination)
+                end)
+
+                if success and path.Status == Enum.PathStatus.Success then
+                    for _, waypoint in ipairs(path:GetWaypoints()) do
+                        if not target.Parent then
+                            break
+                        end
+
+                        if (root.Position - target.Position).Magnitude <= SAFE_DISTANCE then
+                            break
+                        end
+
+                        if waypoint.Action == Enum.PathWaypointAction.Jump then
+                            humanoid.Jump = true
+                        end
+
+                        humanoid:MoveTo(waypoint.Position)
+                        task.wait(0.15)
+                    end
+                end
+            else
+                humanoid:MoveTo(root.Position)
+            end
+        end
+    end
+end)
