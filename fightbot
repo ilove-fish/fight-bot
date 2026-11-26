@@ -5,8 +5,8 @@ local RunService = game:GetService("RunService")
 local LocalPlayer = Players.LocalPlayer
 
 -- SETTINGS
-local DETECTION_DISTANCE = 15
-local SAFE_DISTANCE = 10
+local DETECTION_DISTANCE = 13
+local SAFE_DISTANCE = 6
 local UPDATE_TIME = 0.5
 local TOOL_COOLDOWN = 0.5
 
